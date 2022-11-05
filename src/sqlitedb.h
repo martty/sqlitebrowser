@@ -60,9 +60,9 @@ private:
     /// custom unique_ptr deleter releases database for further use by others
     struct DatabaseReleaser
     {
-        explicit DatabaseReleaser(DBBrowserDB * pParent_ = nullptr) : pParent(pParent_) {}
+        explicit DatabaseReleaser(const DBBrowserDB * pParent_ = nullptr) : pParent(pParent_) {}
 
-        DBBrowserDB * pParent;
+        const DBBrowserDB * pParent;
 
         void operator() (const sqlite3* db) const
         {
@@ -121,7 +121,7 @@ public:
        \returns a unique_ptr containing the SQLite database handle, or
        nullptr in case no database is open.
     **/
-    db_pointer_type get (const QString& user, bool force_wait = false);
+    db_pointer_type get (const QString& user, bool force_wait = false) const;
 
     bool setSavepoint(const std::string& pointname = "RESTOREPOINT");
     bool releaseSavepoint(const std::string& pointname = "RESTOREPOINT");
@@ -289,15 +289,15 @@ signals:
     void dbChanged(bool dirty);
     void structureUpdated();
     void requestCollation(QString name, int eTextRep);
-    void databaseInUseChanged(bool busy, QString user);
+    void databaseInUseChanged(bool busy, QString user) const;
 
 private:
     /// external code needs to go through get() to obtain access to the database
     sqlite3 * _db;
     mutable std::mutex m;
     mutable std::condition_variable cv;
-    bool db_used;
-    QString db_user;
+    mutable bool db_used;
+    mutable QString db_user;
 
     /// wait for release of the DB locked through a previous get(),
     /// giving users the option to discard running task through a

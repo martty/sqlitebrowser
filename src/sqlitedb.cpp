@@ -283,12 +283,8 @@ bool DBBrowserDB::open(const QString& db, bool readOnly)
 **/
 bool DBBrowserDB::detach(const std::string& attached_as)
 {
-    if(!_db)
-    {
-        return false;
-    }
-
-    waitForDbRelease();
+    auto db = get("internal", true);
+    if (!db) return false;
 
     // detach database
     if(!executeSQL("DETACH " + sqlb::escapeIdentifier(attached_as) + ";", false))
@@ -307,10 +303,8 @@ bool DBBrowserDB::detach(const std::string& attached_as)
 
 bool DBBrowserDB::attach(const QString& filePath, QString attach_as)
 {
-    if(!_db)
-        return false;
-
-    waitForDbRelease();
+    auto db = get("internal", true);
+    if (!db) return false;
 
     // In shared cache mode, attempting to attach the same database file more than once results in an error.
     // So no need for a check if this file has already been attached and abort if this is the case
@@ -623,10 +617,8 @@ bool DBBrowserDB::revertToSavepoint(const std::string& pointname)
 
 bool DBBrowserDB::releaseAllSavepoints()
 {
-    if(!_db)
-        return false;
-
-    waitForDbRelease();
+    auto db = get("internal", true);
+    if (!db) return false;
 
     while(!savepointList.empty())
     {
@@ -696,10 +688,8 @@ bool DBBrowserDB::create ( const QString & db)
 bool DBBrowserDB::close()
 {
     // Do nothing if no file is opened
-    if(!_db)
-        return true;
-
-    waitForDbRelease();
+    auto db = get("internal", true);
+    if (!db) return false;
 
     if (getDirty())
     {
@@ -747,10 +737,8 @@ bool DBBrowserDB::close()
 }
 
 bool DBBrowserDB::saveAs(const std::string& filename) {
-    if(!_db)
-        return false;
-
-    waitForDbRelease();
+    auto db = get("internal", true);
+    if (!db) return false;
 
     // Open the database file identified by filename. Exit early if this fails
     // for any reason.
@@ -799,7 +787,7 @@ bool DBBrowserDB::saveAs(const std::string& filename) {
     }
 }
 
-DBBrowserDB::db_pointer_type DBBrowserDB::get(const QString& user, bool force_wait)
+DBBrowserDB::db_pointer_type DBBrowserDB::get(const QString& user, bool force_wait) const
 {
     if(!_db)
         return nullptr;
@@ -857,7 +845,8 @@ bool DBBrowserDB::dump(const QString& filePath,
     bool exportData,
     bool keepOldSchema) const
 {
-    waitForDbRelease();
+    auto db = get("internal", true);
+    if (!db) return false;
 
     // Open file
     QFile file(filePath);
@@ -1068,8 +1057,8 @@ int DBBrowserDB::callbackWrapper (void* callback, int numberColumns, char** valu
 
 bool DBBrowserDB::executeSQL(const std::string& statement, bool dirtyDB, bool logsql, execCallback callback)
 {
-    waitForDbRelease();
-    if(!_db)
+    auto db = get("internal", true);
+    if (!db)
     {
         lastErrorMessage = tr("No database file opened");
         return false;
@@ -1100,8 +1089,8 @@ bool DBBrowserDB::executeSQL(const std::string& statement, bool dirtyDB, bool lo
 
 bool DBBrowserDB::executeMultiSQL(QByteArray query, bool dirty, bool log)
 {
-    waitForDbRelease();
-    if(!_db)
+    auto db = get("internal", true);
+    if (!db)
     {
         lastErrorMessage = tr("No database file opened");
         return false;
@@ -1243,9 +1232,9 @@ bool DBBrowserDB::executeMultiSQL(QByteArray query, bool dirty, bool log)
 
 QByteArray DBBrowserDB::querySingleValueFromDb(const std::string& sql, bool log, ChoiceOnUse choice) const
 {
-    waitForDbRelease(choice);
-    if(!_db)
-        return QByteArray();
+    auto db = get("internal", choice != ChoiceOnUse::Ask);
+    if (!db)
+        return QByteArray();    
 
     if(log)
         logSQL(QString::fromStdString(sql), kLogMsg_App);
@@ -1286,9 +1275,8 @@ QByteArray DBBrowserDB::querySingleValueFromDb(const std::string& sql, bool log,
 
 bool DBBrowserDB::getRow(const sqlb::ObjectIdentifier& table, const QString& rowid, std::vector<QByteArray>& rowdata) const
 {
-    waitForDbRelease();
-    if(!_db)
-        return false;
+    auto db = get("internal", true);
+    if (!db) return false;
 
     std::string query = "SELECT * FROM " + table.toString() + " WHERE ";
 
@@ -1413,8 +1401,8 @@ std::string DBBrowserDB::emptyInsertStmt(const std::string& schemaName, const sq
 
 QString DBBrowserDB::addRecord(const sqlb::ObjectIdentifier& tablename)
 {
-    waitForDbRelease();
-    if(!_db)
+    auto db = get("internal", true);
+    if (!db)
         return QString();
 
     sqlb::TablePtr table = getTableByName(tablename);
@@ -1449,7 +1437,8 @@ QString DBBrowserDB::addRecord(const sqlb::ObjectIdentifier& tablename)
 
 bool DBBrowserDB::deleteRecords(const sqlb::ObjectIdentifier& table, const std::vector<QByteArray>& rowids, const sqlb::StringVector& pseudo_pk)
 {
-    if (!isOpen()) return false;
+    auto db = get("internal", true);
+    if (!db) return false;
 
     // Get primary key of the object to edit.
     sqlb::StringVector pks = primaryKeyForEditing(table, pseudo_pk);
@@ -1491,8 +1480,8 @@ bool DBBrowserDB::deleteRecords(const sqlb::ObjectIdentifier& table, const std::
 bool DBBrowserDB::updateRecord(const sqlb::ObjectIdentifier& table, const std::string& column,
                                const QByteArray& rowid, const QByteArray& value, int force_type, const sqlb::StringVector& pseudo_pk)
 {
-    waitForDbRelease();
-    if (!isOpen()) return false;
+    auto db = get("internal", true);
+    if (!db) return false;
 
     // Get primary key of the object to edit.
     sqlb::StringVector pks = primaryKeyForEditing(table, pseudo_pk);
@@ -1967,7 +1956,8 @@ void DBBrowserDB::logSQL(const QString& statement, LogMessageType msgtype) const
 
 void DBBrowserDB::updateSchema()
 {
-    waitForDbRelease();
+    auto db = get("internal", true);
+    if (!db) return;
 
     schemata.clear();
 
@@ -2118,8 +2108,8 @@ bool DBBrowserDB::setPragma(const std::string& pragma, int value, int& originalv
 
 bool DBBrowserDB::loadExtension(const QString& filePath)
 {
-    waitForDbRelease();
-    if(!_db)
+    auto db = get("internal", true);
+    if (!db) 
         return false;
 
     // Check if file exists
@@ -2169,9 +2159,10 @@ void DBBrowserDB::loadExtensionsFromSettings()
 
 std::vector<std::pair<std::string, std::string>> DBBrowserDB::queryColumnInformation(const std::string& schema_name, const std::string& object_name) const
 {
-    waitForDbRelease();
-
     std::vector<std::pair<std::string, std::string>> result;
+    auto db = get("internal", true);
+    if (!db) return result;
+
     std::string statement = "PRAGMA " + sqlb::escapeIdentifier(schema_name) + ".TABLE_INFO(" + sqlb::escapeIdentifier(object_name) + ");";
     logSQL(QString::fromStdString(statement), kLogMsg_App);
 
