@@ -148,7 +148,7 @@ void DbStructureModel::reloadData()
         delete rootItem->child(0);
 
     // Return here if no DB is opened
-    if(!m_db.isOpen())
+    if(!m_db.isOpen() && !m_db.soft_open())
     {
         endResetModel();
         return;
@@ -198,6 +198,7 @@ void DbStructureModel::reloadData()
 
     // Refresh the view
     endResetModel();
+    m_db.soft_close();
 }
 
 QStringList DbStructureModel::mimeTypes() const

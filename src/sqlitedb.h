@@ -71,6 +71,7 @@ private:
 
             std::unique_lock<std::mutex> lk(pParent->m);
             pParent->db_used = false;
+            pParent->soft_close();
             lk.unlock();
             emit pParent->databaseInUseChanged(false, QString());
             pParent->cv.notify_one();
@@ -83,6 +84,7 @@ public:
     ~DBBrowserDB () override = default;
 
     bool open(const QString& db, bool readOnly = false);
+    bool soft_open();
     bool attach(const QString& filename, QString attach_as = QString());
 
     /**
@@ -93,6 +95,7 @@ public:
     bool detach(const std::string& attached_as);
     bool create ( const QString & db);
     bool close();
+    bool soft_close();
     bool saveAs(const std::string& filename);
 
     // This returns the SQLite version as well as the SQLCipher if DB4S is compiled with encryption support
@@ -130,7 +133,7 @@ public:
     bool revertAll();
 
     bool dump(const QString& filename, const std::vector<std::string>& tablesToDump,
-              bool insertColNames, bool insertNew, bool keepOriginal, bool exportSchema, bool exportData, bool keepOldSchema) const;
+              bool insertColNames, bool insertNew, bool keepOriginal, bool exportSchema, bool exportData, bool keepOldSchema);
 
     enum ChoiceOnUse
     {
@@ -148,9 +151,9 @@ public:
     // column. The 3rd argument is a list of strings where each entry
     // represents the name of corresponding result column.
     using execCallback = std::function<bool(int, std::vector<QByteArray>, std::vector<QByteArray>)>;
-    bool executeSQL(const std::string& statement, bool dirtyDB = true, bool logsql = true, execCallback callback = nullptr);
+    bool executeSQL(const std::string& statement, bool dirtyDB = true, bool logsql = true, execCallback callback = nullptr, bool locked = true);
     bool executeMultiSQL(QByteArray query, bool dirty = true, bool log = false);
-    QByteArray querySingleValueFromDb(const std::string& sql, bool log = true, ChoiceOnUse choice = Ask) const;
+    QByteArray querySingleValueFromDb(const std::string& sql, bool log = true, ChoiceOnUse choice = Ask);
 
     const QString& lastError() const { return lastErrorMessage; }
 
@@ -163,7 +166,7 @@ public:
      * @param rowdata A list of QByteArray containing the row data.
      * @return true if statement execution was ok, else false.
      */
-    bool getRow(const sqlb::ObjectIdentifier& table, const QString& rowid, std::vector<QByteArray>& rowdata) const;
+    bool getRow(const sqlb::ObjectIdentifier& table, const QString& rowid, std::vector<QByteArray>& rowdata);
 
     /**
      * @brief Interrupts the currently running statement as soon as possible.
@@ -177,7 +180,7 @@ private:
      * @param field Name of the field to get the max value
      * @return the max value of the field or 0 on error
      */
-    unsigned long max(const sqlb::ObjectIdentifier& tableName, const std::string& field) const;
+    unsigned long max(const sqlb::ObjectIdentifier& tableName, const std::string& field);
 
     static int callbackWrapper (void* callback, int numberColumns, char** values, char** columnNames);
 
@@ -191,7 +194,7 @@ private:
      * @param pk_value This optional parameter can be used to manually set a specific value for the primary key column
      * @return An sqlite conform INSERT INTO statement with empty values. (NULL,'',0)
      */
-    std::string emptyInsertStmt(const std::string& schemaName, const sqlb::Table& t, const QString& pk_value = QString()) const;
+    std::string emptyInsertStmt(const std::string& schemaName, const sqlb::Table& t, const QString& pk_value = QString());
 
 public:
     QString addRecord(const sqlb::ObjectIdentifier& tablename);
@@ -262,7 +265,7 @@ public:
     /// log an SQL statement [thread-safe]
     void logSQL(const QString& statement, LogMessageType msgtype) const;
 
-    QString getPragma(const std::string& pragma) const;
+    QString getPragma(const std::string& pragma);
     bool setPragma(const std::string& pragma, const QString& value);
     bool setPragma(const std::string& pragma, const QString& value, QString& originalvalue);
     bool setPragma(const std::string& pragma, int value, int& originalvalue);
@@ -274,7 +277,7 @@ public:
     static QStringList DatatypesStrict;
 
 private:
-    std::vector<std::pair<std::string, std::string> > queryColumnInformation(const std::string& schema_name, const std::string& object_name) const;
+    std::vector<std::pair<std::string, std::string> > queryColumnInformation(const std::string& schema_name, const std::string& object_name);
 
 public:
     std::string generateSavepointName(const std::string& identifier = std::string()) const;
@@ -302,7 +305,7 @@ private:
     /// wait for release of the DB locked through a previous get(),
     /// giving users the option to discard running task through a
     /// message box.
-    void waitForDbRelease(ChoiceOnUse choice = Ask) const;
+    void waitForDbRelease(ChoiceOnUse choice = Ask);
 
     QString curDBFilename;
     mutable QString lastErrorMessage;

@@ -278,6 +278,87 @@ bool DBBrowserDB::open(const QString& db, bool readOnly)
     }
 }
 
+bool DBBrowserDB::soft_open()
+{
+    if (isOpen()) 
+        return true;
+
+    if (curDBFilename.isEmpty())
+        return false;
+
+    // Open database file
+    if (sqlite3_open_v2(curDBFilename.toUtf8(), &_db, isReadOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE, nullptr) != SQLITE_OK)
+    {
+        lastErrorMessage = QString::fromUtf8(sqlite3_errmsg(_db));
+        return false;
+    }
+
+    // Set encryption details if database is encrypted
+#ifdef ENABLE_SQLCIPHER
+    if (isEncrypted)
+    {
+        executeSQL("PRAGMA key = " + cipherSettings.getPassword(), false, false);
+        executeSQL("PRAGMA cipher_page_size = " + std::to_string(cipherSettings.getPageSize()), false, false);
+        executeSQL("PRAGMA kdf_iter = " + std::to_string(cipherSettings.getKdfIterations()), false, false);
+        executeSQL("PRAGMA cipher_hmac_algorithm = " + cipherSettings.getHmacAlgorithm(), false, false);
+        executeSQL("PRAGMA cipher_kdf_algorithm = " + cipherSettings.getKdfAlgorithm(), false, false);
+        executeSQL("PRAGMA cipher_plaintext_header_size = " + std::to_string(cipherSettings.getPlaintextHeaderSize()), false, false);
+    }
+#endif
+
+    if (_db)
+    {
+        // add UTF16 collation (comparison is performed by QString functions)
+        sqlite3_create_collation(_db, "UTF16", SQLITE_UTF16, nullptr, sqlite_compare_utf16);
+        // add UTF16CI (case insensitive) collation (comparison is performed by QString functions)
+        sqlite3_create_collation(_db, "UTF16CI", SQLITE_UTF16, nullptr, sqlite_compare_utf16ci);
+
+        // register collation callback
+        Callback<void(void*, sqlite3*, int, const char*)>::func = std::bind(&DBBrowserDB::collationNeeded, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4);
+        void (*c_callback)(void*, sqlite3*, int, const char*) = static_cast<decltype(c_callback)>(Callback<void(void*, sqlite3*, int, const char*)>::callback);
+        sqlite3_collation_needed(_db, nullptr, c_callback);
+
+        // Set foreign key settings as requested in the preferences
+        bool foreignkeys = Settings::getValue("db", "foreignkeys").toBool();
+        std::string sql = std::string("PRAGMA foreign_keys = '") + (foreignkeys ? "1" : "0") + "';";
+        executeSQL(sql, false, true, nullptr, false);
+
+        // Register REGEXP function
+        if (Settings::getValue("extensions", "disableregex").toBool() == false)
+            sqlite3_create_function(_db, "REGEXP", 2, SQLITE_UTF8, nullptr, regexp, nullptr, nullptr);
+
+        // Register our internal helper function for putting multiple values into a single column
+        sqlite3_create_function_v2(
+            _db,
+            "sqlb_make_single_value",
+            -1,
+            SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+            nullptr,
+            sqlite_make_single_value,
+            nullptr,
+            nullptr,
+            nullptr
+        );
+
+        // Load extensions
+        loadExtensionsFromSettings();
+
+        // Execute default SQL
+        if (!isReadOnly)
+        {
+            QByteArray default_sql = Settings::getValue("db", "defaultsqltext").toByteArray();
+            if (!default_sql.isEmpty())
+                executeMultiSQL(default_sql, false, true);
+        }
+
+        //updateSchema();
+
+        return true;
+    } else {
+        return false;
+    }
+}
+
 /**
   detaches a previously attached database identified with its alias-name
 **/
@@ -300,7 +381,7 @@ bool DBBrowserDB::detach(const std::string& attached_as)
 
     // Update schema to load database schema of the newly attached database
     updateSchema();
-
+    soft_close();
     return true;
 }
 
@@ -390,7 +471,7 @@ bool DBBrowserDB::attach(const QString& filePath, QString attach_as)
 
     // Update schema to load database schema of the newly attached database
     updateSchema();
-
+    soft_close();
     return true;
 }
 
@@ -638,6 +719,7 @@ bool DBBrowserDB::releaseAllSavepoints()
     if(sqlite3_get_autocommit(_db) == 0)
         executeSQL("COMMIT;", false, true);
 
+    soft_close();
     return true;
 }
 
@@ -746,6 +828,25 @@ bool DBBrowserDB::close()
     return true;
 }
 
+bool DBBrowserDB::soft_close()
+{
+    if (getDirty())
+    {
+        releaseAllSavepoints();
+    }
+
+    if (sqlite3_close_v2(_db) != SQLITE_OK)
+        qWarning() << tr("Database didn't close correctly, probably still busy");
+
+    _db = nullptr;
+    savepointList.clear();
+
+    emit dbChanged(getDirty());
+
+    // Return true to tell the calling function that the closing wasn't cancelled by the user
+    return true;
+}
+
 bool DBBrowserDB::saveAs(const std::string& filename) {
     if(!_db)
         return false;
@@ -789,7 +890,7 @@ bool DBBrowserDB::saveAs(const std::string& filename) {
         sqlite3_close_v2(_db);
         _db = pTo;
         curDBFilename = QString::fromStdString(filename);
-
+        soft_close();
         return true;
     } else {
         qWarning() << tr("Cannot backup to file: '%1'. Message: %2").arg(filename.c_str(), sqlite3_errmsg(pTo));
@@ -801,9 +902,9 @@ bool DBBrowserDB::saveAs(const std::string& filename) {
 
 DBBrowserDB::db_pointer_type DBBrowserDB::get(const QString& user, bool force_wait)
 {
-    if(!_db)
+    if (!soft_open()) {
         return nullptr;
-
+    }
     waitForDbRelease(force_wait ? Wait : Ask);
 
     db_user = user;
@@ -813,10 +914,11 @@ DBBrowserDB::db_pointer_type DBBrowserDB::get(const QString& user, bool force_wa
     return db_pointer_type(_db, DatabaseReleaser(this));
 }
 
-void DBBrowserDB::waitForDbRelease(ChoiceOnUse choice) const
+void DBBrowserDB::waitForDbRelease(ChoiceOnUse choice)
 {
-    if(!_db)
+    if (!soft_open()) {
         return;
+    }
 
     // We can't show a message box from another thread than the main thread. So instead of crashing we
     // just decide that we don't interrupt any running query in this case.
@@ -846,6 +948,9 @@ void DBBrowserDB::waitForDbRelease(ChoiceOnUse choice) const
         lk.lock();
         cv.wait(lk, [this](){ return !db_used; });
     }
+
+    if (!_db)
+        soft_open();
 }
 
 bool DBBrowserDB::dump(const QString& filePath,
@@ -855,7 +960,7 @@ bool DBBrowserDB::dump(const QString& filePath,
     bool keepOriginal,
     bool exportSchema,
     bool exportData,
-    bool keepOldSchema) const
+    bool keepOldSchema)
 {
     waitForDbRelease();
 
@@ -1045,8 +1150,10 @@ bool DBBrowserDB::dump(const QString& filePath,
 
         QApplication::restoreOverrideCursor();
         qApp->processEvents();
+        soft_close();
         return true;
     }
+    soft_close();
     return false;
 }
 
@@ -1066,9 +1173,11 @@ int DBBrowserDB::callbackWrapper (void* callback, int numberColumns, char** valu
     return userCallback(numberColumns, valuesList, namesList);
 }
 
-bool DBBrowserDB::executeSQL(const std::string& statement, bool dirtyDB, bool logsql, execCallback callback)
+bool DBBrowserDB::executeSQL(const std::string& statement, bool dirtyDB, bool logsql, execCallback callback, bool locked)
 {
-    waitForDbRelease();
+    if (locked) {
+        waitForDbRelease();
+    }
     if(!_db)
     {
         lastErrorMessage = tr("No database file opened");
@@ -1093,7 +1202,7 @@ bool DBBrowserDB::executeSQL(const std::string& statement, bool dirtyDB, bool lo
         lastErrorMessage = QString("%1 (%2)").arg(QString::fromUtf8(errmsg), QString::fromStdString(statement));
         qWarning() << "executeSQL: " << lastErrorMessage;
         sqlite3_free(errmsg);
-
+        
         return false;
     }
 }
@@ -1236,12 +1345,11 @@ bool DBBrowserDB::executeMultiSQL(QByteArray query, bool dirty, bool log)
     // If the DB structure was changed by some command in this SQL script, update our schema representations
     if(structure_updated)
         updateSchema();
-
     // Exit
     return true;
 }
 
-QByteArray DBBrowserDB::querySingleValueFromDb(const std::string& sql, bool log, ChoiceOnUse choice) const
+QByteArray DBBrowserDB::querySingleValueFromDb(const std::string& sql, bool log, ChoiceOnUse choice)
 {
     waitForDbRelease(choice);
     if(!_db)
@@ -1284,7 +1392,7 @@ QByteArray DBBrowserDB::querySingleValueFromDb(const std::string& sql, bool log,
     return retval;
 }
 
-bool DBBrowserDB::getRow(const sqlb::ObjectIdentifier& table, const QString& rowid, std::vector<QByteArray>& rowdata) const
+bool DBBrowserDB::getRow(const sqlb::ObjectIdentifier& table, const QString& rowid, std::vector<QByteArray>& rowdata)
 {
     waitForDbRelease();
     if(!_db)
@@ -1327,7 +1435,7 @@ bool DBBrowserDB::getRow(const sqlb::ObjectIdentifier& table, const QString& row
     return ret;
 }
 
-unsigned long DBBrowserDB::max(const sqlb::ObjectIdentifier& tableName, const std::string& field) const
+unsigned long DBBrowserDB::max(const sqlb::ObjectIdentifier& tableName, const std::string& field)
 {
     // This query returns the maximum value of the given table and column
     std::string query = "SELECT MAX(CAST(" + sqlb::escapeIdentifier(field) + " AS INTEGER)) FROM " + tableName.toString() + ")";
@@ -1348,7 +1456,7 @@ unsigned long DBBrowserDB::max(const sqlb::ObjectIdentifier& tableName, const st
     return querySingleValueFromDb(query).toULong();
 }
 
-std::string DBBrowserDB::emptyInsertStmt(const std::string& schemaName, const sqlb::Table& t, const QString& pk_value) const
+std::string DBBrowserDB::emptyInsertStmt(const std::string& schemaName, const sqlb::Table& t, const QString& pk_value)
 {
     std::string stmt = "INSERT INTO " + sqlb::escapeIdentifier(schemaName) + "." + sqlb::escapeIdentifier(t.name());
 
@@ -1437,9 +1545,11 @@ QString DBBrowserDB::addRecord(const sqlb::ObjectIdentifier& tablename)
 
     if(!executeSQL(sInsertstmt))
     {
+        soft_close();
         qWarning() << "addRecord: " << lastErrorMessage;
         return QString();
     } else {
+        soft_close();
         if(table->withoutRowidTable())
             return pk_value;
         else
@@ -1481,8 +1591,10 @@ bool DBBrowserDB::deleteRecords(const sqlb::ObjectIdentifier& table, const std::
 
     if(executeSQL(statement))
     {
+        soft_close();
         return true;
     } else {
+        soft_close();
         qWarning() << "deleteRecord: " << lastErrorMessage;
         return false;
     }
@@ -1544,8 +1656,10 @@ bool DBBrowserDB::updateRecord(const sqlb::ObjectIdentifier& table, const std::s
 
     if(success == 1)
     {
+        soft_close();
         return true;
     } else {
+        soft_close();
         lastErrorMessage = sqlite3_errmsg(_db);
         qWarning() << "updateRecord: " << lastErrorMessage;
         return false;
@@ -2041,13 +2155,13 @@ void DBBrowserDB::updateSchema()
                     object_map.triggers.insert({val_name, trigger});
                 }
             }
-
+            soft_close();
             return false;
         }))
         {
             qWarning() << tr("could not get list of db objects: %1").arg(sqlite3_errmsg(_db));
         }
-
+        soft_close();
         return false;
     }))
     {
@@ -2057,7 +2171,7 @@ void DBBrowserDB::updateSchema()
     emit structureUpdated();
 }
 
-QString DBBrowserDB::getPragma(const std::string& pragma) const
+QString DBBrowserDB::getPragma(const std::string& pragma)
 {
     if (pragma=="case_sensitive_like")
         return querySingleValueFromDb("SELECT 'x' NOT LIKE 'X';");
@@ -2143,8 +2257,10 @@ bool DBBrowserDB::loadExtension(const QString& filePath)
 
     if (result == SQLITE_OK)
     {
+        soft_close();
         return true;
     } else {
+        soft_close();
         lastErrorMessage = QString::fromUtf8(error);
         sqlite3_free(error);
         return false;
@@ -2167,7 +2283,7 @@ void DBBrowserDB::loadExtensionsFromSettings()
     }
 }
 
-std::vector<std::pair<std::string, std::string>> DBBrowserDB::queryColumnInformation(const std::string& schema_name, const std::string& object_name) const
+std::vector<std::pair<std::string, std::string>> DBBrowserDB::queryColumnInformation(const std::string& schema_name, const std::string& object_name)
 {
     waitForDbRelease();
 
@@ -2190,7 +2306,7 @@ std::vector<std::pair<std::string, std::string>> DBBrowserDB::queryColumnInforma
     } else{
         lastErrorMessage = tr("could not get column information");
     }
-
+    soft_close();
     return result;
 }
 
