@@ -198,7 +198,6 @@ void DbStructureModel::reloadData()
 
     // Refresh the view
     endResetModel();
-    m_db.soft_close();
 }
 
 QStringList DbStructureModel::mimeTypes() const

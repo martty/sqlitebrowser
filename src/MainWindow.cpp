@@ -575,6 +575,7 @@ bool MainWindow::fileOpen(const QString& fileName, bool openFromProject, bool re
                 remoteDock->fileOpened(wFile);
 
                 retval = true;
+                db.soft_close();
             } else {
                 QMessageBox::warning(this, qApp->applicationName(), tr("Could not open database file.\nReason: %1").arg(db.lastError()));
                 return false;

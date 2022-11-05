@@ -2033,6 +2033,7 @@ bool DBBrowserDB::alterTable(const sqlb::ObjectIdentifier& tablename, const sqlb
 
     // Success, update the DB schema before returning
     updateSchema();
+    soft_close();
     return true;
 }
 
@@ -2155,13 +2156,11 @@ void DBBrowserDB::updateSchema()
                     object_map.triggers.insert({val_name, trigger});
                 }
             }
-            soft_close();
             return false;
         }))
         {
             qWarning() << tr("could not get list of db objects: %1").arg(sqlite3_errmsg(_db));
         }
-        soft_close();
         return false;
     }))
     {
