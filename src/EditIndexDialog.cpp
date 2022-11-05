@@ -259,20 +259,21 @@ void EditIndexDialog::checkInput()
 void EditIndexDialog::accept()
 {
     // When editing an index, delete the old one first
+    auto transaction = pdb.get("dialog");
     if(!newIndex)
     {
-        if(!pdb.executeSQL("DROP INDEX IF EXISTS " + curIndex.toString()))
+        if(!transaction.executeSQL("DROP INDEX IF EXISTS " + curIndex.toString()))
         {
-            QMessageBox::warning(this, qApp->applicationName(), tr("Deleting the old index failed:\n%1").arg(pdb.lastError()));
+            QMessageBox::warning(this, qApp->applicationName(), tr("Deleting the old index failed:\n%1").arg(transaction.lastError()));
             return;
         }
     }
 
     // Create the new index in the schema of the selected table
-    if(pdb.executeSQL(index.sql(sqlb::ObjectIdentifier(ui->comboTableName->currentData().toString().toStdString()).schema())))
+    if(transaction.executeSQL(index.sql(sqlb::ObjectIdentifier(ui->comboTableName->currentData().toString().toStdString()).schema())))
         QDialog::accept();
     else
-        QMessageBox::warning(this, QApplication::applicationName(), tr("Creating the index failed:\n%1").arg(pdb.lastError()));
+        QMessageBox::warning(this, QApplication::applicationName(), tr("Creating the index failed:\n%1").arg(transaction.lastError()));
 }
 
 void EditIndexDialog::reject()

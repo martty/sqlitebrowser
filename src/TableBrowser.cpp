@@ -996,8 +996,9 @@ void TableBrowser::unlockViewEditing(bool unlock, QString pk)
                 return;
             }
 
+            auto transaction = db->get("browser");
             // Do some basic testing of the input and if the input appears to be good, go on
-            if(db->executeSQL("SELECT " + sqlb::escapeIdentifier(pk.toStdString()) + " FROM " + currentTable.toString() + " LIMIT 1;", false, true))
+            if(transaction.executeSQL("SELECT " + sqlb::escapeIdentifier(pk.toStdString()) + " FROM " + currentTable.toString() + " LIMIT 1;", false, true))
                 break;
         }
     } else if(!unlock) {

@@ -68,7 +68,8 @@ EditTableDialog::EditTableDialog(DBBrowserDB& db, const sqlb::ObjectIdentifier& 
     ui->buttonAddIndexConstraint->setMenu(constraint_menu);
 
     // Get list of all collations
-    db.executeSQL("PRAGMA collation_list;", false, true, [this](int column_count, std::vector<QByteArray> columns, std::vector<QByteArray>) -> bool {
+    auto transaction = db.get("edit table dialog");
+    transaction.executeSQL("PRAGMA collation_list;", false, true, [this](int column_count, std::vector<QByteArray> columns, std::vector<QByteArray>) -> bool {
         if(column_count >= 2)
             m_collationList.push_back(columns.at(1));
         return false;
@@ -422,10 +423,11 @@ void EditTableDialog::accept()
 {
     // Are we editing an already existing table or designing a new one? In the first case there is a table name set,
     // in the latter the current table name is empty
+    auto transaction = pdb.get("edit table dialog");
     if(m_bNewTable)
     {
         // Creation of new table
-        if(!pdb.executeSQL(m_table.sql(ui->comboSchema->currentText().toStdString())))
+        if(!transaction.executeSQL(m_table.sql(ui->comboSchema->currentText().toStdString())))
         {
             QMessageBox::warning(
                 this,
@@ -437,7 +439,7 @@ void EditTableDialog::accept()
         // Editing of old table
 
         // Apply all changes to the actual table in the database
-        if(!pdb.alterTable(curTable, m_table, trackColumns, ui->comboSchema->currentText().toStdString()))
+        if(!transaction.alterTable(curTable, m_table, trackColumns, ui->comboSchema->currentText().toStdString()))
         {
             QMessageBox::warning(this, QApplication::applicationName(), pdb.lastError());
             return;

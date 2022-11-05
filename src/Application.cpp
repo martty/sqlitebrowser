@@ -301,7 +301,7 @@ Application::Application(int& argc, char** argv) :
                 QFile file(f);
                 if(file.open(QIODevice::ReadOnly))
                 {
-                    m_mainWindow->getDb().executeMultiSQL(file.readAll(), false, true);
+                    m_mainWindow->getDb().get("app").executeMultiSQL(file.readAll(), false, true);
                     file.close();
                 }
             }

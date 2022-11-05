@@ -13,6 +13,7 @@
 #include <QString>
 
 #include "RowCache.h"
+#include "sqlitedb.h"
 
 struct sqlite3;
 
@@ -27,7 +28,7 @@ public:
 
     /// set up worker thread to handle row loading
     explicit RowLoader (
-        std::function<std::shared_ptr<sqlite3>(void)> db_getter,
+        std::function<DBTransaction(void)> db_getter,
         std::function<void(QString)> statement_logger,
         std::vector<std::string> & headers,
         std::mutex & cache_mutex,
@@ -60,14 +61,14 @@ public:
 
     /// get current database - note that the worker thread might be
     /// working on it, too... \returns current db, or nullptr.
-    std::shared_ptr<sqlite3> getDb () const;
+    DBTransaction& getDb ();
 
 signals:
     void fetched(int token, size_t row_begin, size_t row_end);
     void rowCountComplete(int token, int num_rows);
 
 private:
-    const std::function<std::shared_ptr<sqlite3>()> db_getter;
+    const std::function<DBTransaction()> db_getter;
     const std::function<void(QString)> statement_logger;
     std::vector<std::string> & headers;
     std::mutex & cache_mutex;
@@ -84,7 +85,7 @@ private:
     bool first_chunk_loaded;
 
     size_t num_tasks;
-    std::shared_ptr<sqlite3> pDb; //< exclusive access while held...
+    DBTransaction pDb; //< exclusive access while held...
 
     bool stop_requested;
 
@@ -112,7 +113,7 @@ private:
     std::unique_ptr<Task> current_task;
     std::unique_ptr<Task> next_task;
 
-    int countRows () const;
+    int countRows ();
 
     void process (Task &);
 

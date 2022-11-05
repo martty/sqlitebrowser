@@ -330,12 +330,13 @@ bool DbStructureModel::dropMimeData(const QMimeData* data, Qt::DropAction action
     QByteArray d = data->data("text/plain");
 
     // Try to execute the SQL statement
-    if(m_db.executeMultiSQL(d, true, true))
+    auto transaction = m_db.get("structure model");
+    if(transaction.executeMultiSQL(d, true, true))
     {
         m_db.updateSchema();
         return true;
     } else {
-        QMessageBox::warning(nullptr, QApplication::applicationName(), m_db.lastError());
+        QMessageBox::warning(nullptr, QApplication::applicationName(), transaction.lastError());
         return false;
     }
 }

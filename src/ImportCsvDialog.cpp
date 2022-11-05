@@ -117,14 +117,14 @@ namespace {
 void rollback(
         ImportCsvDialog* dialog,
         DBBrowserDB* pdb,
-        DBBrowserDB::db_pointer_type* db_ptr,
+        DBTransaction& db_tr,
         const std::string& savepointName,
         size_t nRecord,
         const QString& message)
 {
     // Release DB handle. This needs to be done before calling revertToSavepoint as that function needs to be able to acquire its own handle.
-    if(db_ptr)
-        *db_ptr = nullptr;
+    if(db_tr)
+        db_tr.release();
 
     QApplication::restoreOverrideCursor();  // restore original cursor
     if(!message.isEmpty())
@@ -557,7 +557,7 @@ bool ImportCsvDialog::importCsv(const QString& fileName, const QString& name)
     std::string restorepointName = pdb->generateSavepointName("csvimport");
     if(!pdb->setSavepoint(restorepointName))
     {
-        rollback(this, pdb, nullptr, restorepointName, 0, tr("Creating restore point failed: %1").arg(pdb->lastError()));
+        rollback(this, pdb, DBTransaction(nullptr), restorepointName, 0, tr("Creating restore point failed: %1").arg(pdb->lastError()));
         return false;
     }
 
@@ -568,9 +568,10 @@ bool ImportCsvDialog::importCsv(const QString& fileName, const QString& name)
     bool failOnMissing = ui->checkFailOnMissing->isChecked();
     if(!importToExistingTable)
     {
-        if(!pdb->createTable(sqlb::ObjectIdentifier("main", tableName.toStdString()), fieldList))
+        auto transaction = pdb->get("import csv");
+        if(!transaction.createTable(sqlb::ObjectIdentifier("main", tableName.toStdString()), fieldList))
         {
-            rollback(this, pdb, nullptr, restorepointName, 0, tr("Creating the table failed: %1").arg(pdb->lastError()));
+            rollback(this, pdb, DBTransaction(nullptr), restorepointName, 0, tr("Creating the table failed: %1").arg(pdb->lastError()));
             return false;
         }
 
@@ -633,7 +634,7 @@ bool ImportCsvDialog::importCsv(const QString& fileName, const QString& name)
     auto pDb = pdb->get(tr("importing CSV"));
     if(sqlite3_prepare_v2(pDb.get(), sQuery.c_str(), static_cast<int>(sQuery.size()), &stmt, nullptr) != SQLITE_OK)
     {
-        rollback(this, pdb, nullptr, restorepointName, 0, tr("Could not prepare INSERT statement: %1").arg(pdb->lastError()));
+        rollback(this, pdb, DBTransaction(nullptr), restorepointName, 0, tr("Could not prepare INSERT statement: %1").arg(pdb->lastError()));
         return false;
     }
 
@@ -728,7 +729,7 @@ bool ImportCsvDialog::importCsv(const QString& fileName, const QString& name)
         }
 
         sqlite3_finalize(stmt);
-        rollback(this, pdb, &pDb, restorepointName, lastRowNum, message);
+        rollback(this, pdb, pDb, restorepointName, lastRowNum, message);
         return false;
     }
 

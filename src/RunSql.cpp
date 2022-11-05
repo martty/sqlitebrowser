@@ -307,10 +307,10 @@ RunSql::StatementType RunSql::getQueryType(const QString& query)
 
 void RunSql::acquireDbAccess()
 {
-    pDb = db.get(tr("executing query"), true);
+    pDb = db.get(tr("executing query"), ChoiceOnUse::Wait);
 }
 
 void RunSql::releaseDbAccess()
 {
-    pDb = nullptr;
+    pDb.release();
 }

@@ -143,14 +143,15 @@ void ColumnDisplayFormatDialog::accept()
         // Execute a query using the display format and check that it only returns one column.
         int customNumberColumns = 0;
 
-        DBBrowserDB::execCallback callback = [&customNumberColumns](int numberColumns, std::vector<QByteArray>, std::vector<QByteArray>) -> bool {
+        DBTransaction::execCallback callback = [&customNumberColumns](int numberColumns, std::vector<QByteArray>, std::vector<QByteArray>) -> bool {
             customNumberColumns = numberColumns;
             // Return false so the query is not aborted and no error is reported.
             return false;
         };
-        if(!pdb.executeSQL("SELECT " + ui->editDisplayFormat->text().toStdString() + " FROM " + curTable.toString() + " LIMIT 1",
+        auto transaction = pdb.get("column display");
+        if(!transaction.executeSQL("SELECT " + ui->editDisplayFormat->text().toStdString() + " FROM " + curTable.toString() + " LIMIT 1",
                            false, true, callback))
-            errorMessage = tr("Error in custom display format. Message from database engine:\n\n%1").arg(pdb.lastError());
+            errorMessage = tr("Error in custom display format. Message from database engine:\n\n%1").arg(transaction.lastError());
         else if(customNumberColumns != 1)
             errorMessage = tr("Custom display format must return only one column but it returned %1.").arg(customNumberColumns);
 

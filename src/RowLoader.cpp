@@ -1,6 +1,7 @@
 #include <QDebug>
 
 #include "RowLoader.h"
+#include "sqlitedb.h"
 #include "sqlite.h"
 
 namespace {
@@ -16,7 +17,7 @@ namespace {
 } // anon ns
 
 
-RowLoader::RowLoader (std::function<std::shared_ptr<sqlite3>(void)> db_getter_,
+RowLoader::RowLoader (std::function<DBTransaction(void)> db_getter_,
     std::function<void(QString)> statement_logger_,
     std::vector<std::string> & headers_,
     std::mutex & cache_mutex_,
@@ -72,13 +73,13 @@ void RowLoader::nosync_ensureDbAccess ()
         pDb = db_getter();
 }
 
-std::shared_ptr<sqlite3> RowLoader::getDb () const
+DBTransaction& RowLoader::getDb ()
 {
     std::lock_guard<std::mutex> lk(m);
     return pDb;
 }
 
-int RowLoader::countRows() const
+int RowLoader::countRows()
 {
     int retval = -1;
 
@@ -140,7 +141,7 @@ void RowLoader::triggerFetch (int token, size_t row_begin, size_t row_end)
 void RowLoader::nosync_taskDone()
 {
     if(--num_tasks == 0) {
-        pDb = nullptr;
+        pDb.release();
     }
 }
 
@@ -169,7 +170,7 @@ void RowLoader::stop ()
 bool RowLoader::readingData () const
 {
     std::unique_lock<std::mutex> lk(m);
-    return pDb != nullptr;
+    return static_cast<bool>(pDb);
 }
 
 void RowLoader::waitUntilIdle () const

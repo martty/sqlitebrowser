@@ -6,6 +6,8 @@
 #include <condition_variable>
 #include <QThread>
 
+#include "sqlitedb.h"
+
 class DBBrowserDB;
 struct sqlite3;
 
@@ -63,7 +65,7 @@ signals:
 
 private:
     DBBrowserDB& db;
-    std::shared_ptr<sqlite3> pDb;
+    DBTransaction pDb;
 
     mutable std::mutex m;
     mutable std::condition_variable cv;

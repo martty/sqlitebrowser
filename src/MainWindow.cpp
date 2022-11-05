@@ -526,6 +526,7 @@ bool MainWindow::fileOpen(const QString& fileName, bool openFromProject, bool re
 #endif
                     );
     }
+    auto transaction = db.get("app");
     // catch situation where user has canceled file selection from dialog
     if(!wFile.isEmpty() && QFile::exists(wFile) )
     {
@@ -554,7 +555,7 @@ bool MainWindow::fileOpen(const QString& fileName, bool openFromProject, bool re
                         closeSqlTab(i, true);
                 }
 
-                statusEncodingLabel->setText(db.getPragma("encoding"));
+                statusEncodingLabel->setText(transaction.getPragma("encoding"));
                 statusEncryptionLabel->setVisible(db.encrypted());
                 statusReadOnlyLabel->setVisible(db.readOnly());
                 setCurrentFile(wFile);
@@ -599,7 +600,8 @@ void MainWindow::fileNew()
         db.create(fileName);
         setCurrentFile(fileName);
         addToRecentFilesMenu(fileName);
-        statusEncodingLabel->setText(db.getPragma("encoding"));
+        auto transaction = db.get("app");
+        statusEncodingLabel->setText(transaction.getPragma("encoding"));
         statusEncryptionLabel->setVisible(false);
         statusReadOnlyLabel->setVisible(false);
         refreshTableBrowsers();
@@ -614,9 +616,9 @@ void MainWindow::fileNewInMemoryDatabase(bool open_create_dialog)
     // Open an in-memory database. We use open() instead of create() here because the extra work create() does is not needed
     // when no files are stored on disk.
     db.open(":memory:");
-
+    auto transaction = db.get("app");
     setCurrentFile(tr("In-Memory database"));
-    statusEncodingLabel->setText(db.getPragma("encoding"));
+    statusEncodingLabel->setText(transaction.getPragma("encoding"));
     statusEncryptionLabel->setVisible(false);
     statusReadOnlyLabel->setVisible(false);
     remoteDock->fileOpened(":memory:");
@@ -913,8 +915,9 @@ void MainWindow::deleteObject()
                             QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes)
     {
         // Delete the table
+        auto transaction = db.get("app");
         QString statement = QString("DROP %1 %2;").arg(type.toUpper(), QString::fromStdString(obj.toString()));
-        if(!db.executeSQL(statement.toStdString()))
+        if(!transaction.executeSQL(statement.toStdString()))
         {
             if (type == "table")
                 message = tr("Error: could not delete the table.");
@@ -943,13 +946,15 @@ void MainWindow::editObject()
     sqlb::ObjectIdentifier obj = dbSelected->object();
     QString type = dbSelected->objectType();
 
+    auto transaction = db.get("app");
+
     if(type == "table")
     {
         // For a safe and possibly complex table modification we must follow the steps documented in
         // https://www.sqlite.org/lang_altertable.html
         // Paragraph (first procedure): Making Other Kinds Of Table Schema Changes
 
-        QString foreign_keys = db.getPragma("foreign_keys");
+        QString foreign_keys = transaction.getPragma("foreign_keys");
         if (foreign_keys == "1") {
             if(db.getDirty() && QMessageBox::question(this,
                                      QApplication::applicationName(),
@@ -959,7 +964,7 @@ void MainWindow::editObject()
                 return;
             // Commit all changes so the foreign_keys can be effective.
             fileSave();
-            db.setPragma("foreign_keys", "0");
+            transaction.setPragma("foreign_keys", "0");
         }
 
         EditTableDialog dialog(db, obj, false, this);
@@ -967,7 +972,7 @@ void MainWindow::editObject()
 
         // If foreign_keys were enabled, we must commit or rollback the transaction so the foreign_keys pragma can be restored.
         if (foreign_keys == "1") {
-            if (!db.querySingleValueFromDb("PRAGMA " + sqlb::escapeIdentifier(obj.schema()) + ".foreign_key_check").isNull()) {
+            if (!transaction.querySingleValueFromDb("PRAGMA " + sqlb::escapeIdentifier(obj.schema()) + ".foreign_key_check").isNull()) {
                 // Raise warning for accepted modification. When rejected, warn user also since we know now that the table has problems,
                 // but it wasn't our fault.
                 if (ok)
@@ -982,7 +987,7 @@ void MainWindow::editObject()
                 // Commit all changes so the foreign_keys can be effective.
                 fileSave();
             }
-            db.setPragma("foreign_keys", foreign_keys);
+            transaction.setPragma("foreign_keys", foreign_keys);
         }
         if(ok) {
             for(const auto& d : allTableBrowserDocks())
@@ -1029,7 +1034,8 @@ void MainWindow::updateRecordText(const QPersistentModelIndex& idx, const QByteA
 
 void MainWindow::evaluateText(const QPersistentModelIndex& idx, const std::string& text)
 {
-    QByteArray value = db.querySingleValueFromDb("SELECT " + text, /* log */ true, DBBrowserDB::Wait);
+    auto transaction = db.get("app");
+    QByteArray value = transaction.querySingleValueFromDb("SELECT " + text, /* log */ true, ChoiceOnUse::Wait);
     m_currentTabTableModel->setTypedData(idx, !isTextOnly(value), value);
 }
 
@@ -1552,8 +1558,9 @@ void MainWindow::importDatabaseFromSQL()
 
     // Defer foreign keys. Just deferring them instead of disabling them should work fine because in the import we only expect CREATE and INSERT
     // statements which unlike in the Edit Table dialog shouldn't trigger any problems.
-    QString foreignKeysOldSettings = db.getPragma("defer_foreign_keys");
-    db.setPragma("defer_foreign_keys", "1");
+    auto transaction = db.get("app");
+    QString foreignKeysOldSettings = transaction.getPragma("defer_foreign_keys");
+    transaction.setPragma("defer_foreign_keys", "1");
 
     // Open, read, execute and close file
     QApplication::setOverrideCursor(Qt::WaitCursor);
@@ -1561,19 +1568,19 @@ void MainWindow::importDatabaseFromSQL()
     f.open(QIODevice::ReadOnly);
     QByteArray filedata = f.readAll();
     removeBom(filedata);
-    bool ok = db.executeMultiSQL(filedata, newDbFile.size() == 0);
+    bool ok = transaction.executeMultiSQL(filedata, newDbFile.size() == 0);
     // Restore cursor before asking the user to accept the message
     QApplication::restoreOverrideCursor();
     if(!ok)
         QMessageBox::warning(this, QApplication::applicationName(), tr("Error importing data: %1").arg(db.lastError()));
-    else if(db.getPragma("foreign_keys") == "1" && !db.querySingleValueFromDb("PRAGMA foreign_key_check").isNull())
+    else if(transaction.getPragma("foreign_keys") == "1" && !transaction.querySingleValueFromDb("PRAGMA foreign_key_check").isNull())
         QMessageBox::warning(this, QApplication::applicationName(), tr("Import completed. Some foreign key constraints are violated. Please fix them before saving."));
     else
         QMessageBox::information(this, QApplication::applicationName(), tr("Import completed."));
     f.close();
 
     // Restore the former foreign key settings
-    db.setPragma("defer_foreign_keys", foreignKeysOldSettings);
+    transaction.setPragma("defer_foreign_keys", foreignKeysOldSettings);
 
     // Refresh views
     db.updateSchema();
@@ -1922,24 +1929,25 @@ void MainWindow::resizeEvent(QResizeEvent*)
 
 void MainWindow::loadPragmas()
 {
-    pragmaValues.autovacuum = db.getPragma("auto_vacuum").toInt();
-    pragmaValues.automatic_index = db.getPragma("automatic_index").toInt();
-    pragmaValues.checkpoint_fullsync = db.getPragma("checkpoint_fullfsync").toInt();
-    pragmaValues.foreign_keys = db.getPragma("foreign_keys").toInt();
-    pragmaValues.fullfsync = db.getPragma("fullfsync").toInt();
-    pragmaValues.ignore_check_constraints = db.getPragma("ignore_check_constraints").toInt();
-    pragmaValues.journal_mode = db.getPragma("journal_mode").toUpper();
-    pragmaValues.journal_size_limit = db.getPragma("journal_size_limit").toInt();
-    pragmaValues.locking_mode = db.getPragma("locking_mode").toUpper();
-    pragmaValues.max_page_count = db.getPragma("max_page_count").toInt();
-    pragmaValues.page_size = db.getPragma("page_size").toInt();
-    pragmaValues.recursive_triggers = db.getPragma("recursive_triggers").toInt();
-    pragmaValues.secure_delete = db.getPragma("secure_delete").toInt();
-    pragmaValues.synchronous = db.getPragma("synchronous").toInt();
-    pragmaValues.temp_store = db.getPragma("temp_store").toInt();
-    pragmaValues.user_version = db.getPragma("user_version").toInt();
-    pragmaValues.wal_autocheckpoint = db.getPragma("wal_autocheckpoint").toInt();
-    pragmaValues.case_sensitive_like = db.getPragma("case_sensitive_like").toInt();
+    auto transaction = db.get("app");
+    pragmaValues.autovacuum = transaction.getPragma("auto_vacuum").toInt();
+    pragmaValues.automatic_index = transaction.getPragma("automatic_index").toInt();
+    pragmaValues.checkpoint_fullsync = transaction.getPragma("checkpoint_fullfsync").toInt();
+    pragmaValues.foreign_keys = transaction.getPragma("foreign_keys").toInt();
+    pragmaValues.fullfsync = transaction.getPragma("fullfsync").toInt();
+    pragmaValues.ignore_check_constraints = transaction.getPragma("ignore_check_constraints").toInt();
+    pragmaValues.journal_mode = transaction.getPragma("journal_mode").toUpper();
+    pragmaValues.journal_size_limit = transaction.getPragma("journal_size_limit").toInt();
+    pragmaValues.locking_mode = transaction.getPragma("locking_mode").toUpper();
+    pragmaValues.max_page_count = transaction.getPragma("max_page_count").toInt();
+    pragmaValues.page_size = transaction.getPragma("page_size").toInt();
+    pragmaValues.recursive_triggers = transaction.getPragma("recursive_triggers").toInt();
+    pragmaValues.secure_delete = transaction.getPragma("secure_delete").toInt();
+    pragmaValues.synchronous = transaction.getPragma("synchronous").toInt();
+    pragmaValues.temp_store = transaction.getPragma("temp_store").toInt();
+    pragmaValues.user_version = transaction.getPragma("user_version").toInt();
+    pragmaValues.wal_autocheckpoint = transaction.getPragma("wal_autocheckpoint").toInt();
+    pragmaValues.case_sensitive_like = transaction.getPragma("case_sensitive_like").toInt();
 
     updatePragmaUi();
 }
@@ -1976,24 +1984,25 @@ void MainWindow::savePragmas()
             return; // abort
         }
     }
-    db.setPragma("auto_vacuum", ui->comboboxPragmaAutoVacuum->currentIndex(), pragmaValues.autovacuum);
-    db.setPragma("automatic_index", ui->checkboxPragmaAutomaticIndex->isChecked(), pragmaValues.automatic_index);
-    db.setPragma("checkpoint_fullfsync", ui->checkboxPragmaCheckpointFullFsync->isChecked(), pragmaValues.checkpoint_fullsync);
-    db.setPragma("foreign_keys", ui->checkboxPragmaForeignKeys->isChecked(), pragmaValues.foreign_keys);
-    db.setPragma("fullfsync", ui->checkboxPragmaFullFsync->isChecked(), pragmaValues.fullfsync);
-    db.setPragma("ignore_check_constraints", ui->checkboxPragmaIgnoreCheckConstraints->isChecked(), pragmaValues.ignore_check_constraints);
-    db.setPragma("journal_mode", ui->comboboxPragmaJournalMode->currentText().toUpper(), pragmaValues.journal_mode);
-    db.setPragma("journal_size_limit", ui->spinPragmaJournalSizeLimit->value(), pragmaValues.journal_size_limit);
-    db.setPragma("locking_mode", ui->comboboxPragmaLockingMode->currentText().toUpper(), pragmaValues.locking_mode);
-    db.setPragma("max_page_count", ui->spinPragmaMaxPageCount->value(), pragmaValues.max_page_count);
-    db.setPragma("page_size", ui->comboPragmaPageSize->currentText().toInt(), pragmaValues.page_size);
-    db.setPragma("recursive_triggers", ui->checkboxPragmaRecursiveTriggers->isChecked(), pragmaValues.recursive_triggers);
-    db.setPragma("secure_delete", ui->checkboxPragmaSecureDelete->isChecked(), pragmaValues.secure_delete);
-    db.setPragma("synchronous", ui->comboboxPragmaSynchronous->currentIndex(), pragmaValues.synchronous);
-    db.setPragma("temp_store", ui->comboboxPragmaTempStore->currentIndex(), pragmaValues.temp_store);
-    db.setPragma("user_version", ui->spinPragmaUserVersion->value(), pragmaValues.user_version);
-    db.setPragma("wal_autocheckpoint", ui->spinPragmaWalAutoCheckpoint->value(), pragmaValues.wal_autocheckpoint);
-    db.setPragma("case_sensitive_like", ui->checkboxPragmaCaseSensitiveLike->isChecked(), pragmaValues.case_sensitive_like);
+    auto transaction = db.get("app");
+    transaction.setPragma("auto_vacuum", ui->comboboxPragmaAutoVacuum->currentIndex(), pragmaValues.autovacuum);
+    transaction.setPragma("automatic_index", ui->checkboxPragmaAutomaticIndex->isChecked(), pragmaValues.automatic_index);
+    transaction.setPragma("checkpoint_fullfsync", ui->checkboxPragmaCheckpointFullFsync->isChecked(), pragmaValues.checkpoint_fullsync);
+    transaction.setPragma("foreign_keys", ui->checkboxPragmaForeignKeys->isChecked(), pragmaValues.foreign_keys);
+    transaction.setPragma("fullfsync", ui->checkboxPragmaFullFsync->isChecked(), pragmaValues.fullfsync);
+    transaction.setPragma("ignore_check_constraints", ui->checkboxPragmaIgnoreCheckConstraints->isChecked(), pragmaValues.ignore_check_constraints);
+    transaction.setPragma("journal_mode", ui->comboboxPragmaJournalMode->currentText().toUpper(), pragmaValues.journal_mode);
+    transaction.setPragma("journal_size_limit", ui->spinPragmaJournalSizeLimit->value(), pragmaValues.journal_size_limit);
+    transaction.setPragma("locking_mode", ui->comboboxPragmaLockingMode->currentText().toUpper(), pragmaValues.locking_mode);
+    transaction.setPragma("max_page_count", ui->spinPragmaMaxPageCount->value(), pragmaValues.max_page_count);
+    transaction.setPragma("page_size", ui->comboPragmaPageSize->currentText().toInt(), pragmaValues.page_size);
+    transaction.setPragma("recursive_triggers", ui->checkboxPragmaRecursiveTriggers->isChecked(), pragmaValues.recursive_triggers);
+    transaction.setPragma("secure_delete", ui->checkboxPragmaSecureDelete->isChecked(), pragmaValues.secure_delete);
+    transaction.setPragma("synchronous", ui->comboboxPragmaSynchronous->currentIndex(), pragmaValues.synchronous);
+    transaction.setPragma("temp_store", ui->comboboxPragmaTempStore->currentIndex(), pragmaValues.temp_store);
+    transaction.setPragma("user_version", ui->spinPragmaUserVersion->value(), pragmaValues.user_version);
+    transaction.setPragma("wal_autocheckpoint", ui->spinPragmaWalAutoCheckpoint->value(), pragmaValues.wal_autocheckpoint);
+    transaction.setPragma("case_sensitive_like", ui->checkboxPragmaCaseSensitiveLike->isChecked(), pragmaValues.case_sensitive_like);
     isProjectModified = true;
 
     updatePragmaUi();
@@ -2674,6 +2683,8 @@ bool MainWindow::loadProject(QString filename, bool readOnly)
         addToRecentFilesMenu(filename, readOnly);
         currentProjectFilename = filename;
 
+        auto transaction = db.get("app");
+
         while(!xml.atEnd() && !xml.hasError())
         {
             // Read next token
@@ -2702,15 +2713,15 @@ bool MainWindow::loadProject(QString filename, bool readOnly)
 
                     // PRAGMAs
                     if(xml.attributes().hasAttribute("foreign_keys"))
-                        db.setPragma("foreign_keys", xml.attributes().value("foreign_keys").toString());
+                        transaction.setPragma("foreign_keys", xml.attributes().value("foreign_keys").toString());
                     if(xml.attributes().hasAttribute("case_sensitive_like"))
-                        db.setPragma("case_sensitive_like", xml.attributes().value("case_sensitive_like").toString());
+                        transaction.setPragma("case_sensitive_like", xml.attributes().value("case_sensitive_like").toString());
                     if(xml.attributes().hasAttribute("temp_store"))
-                        db.setPragma("temp_store", xml.attributes().value("temp_store").toString());
+                        transaction.setPragma("temp_store", xml.attributes().value("temp_store").toString());
                     if(xml.attributes().hasAttribute("wal_autocheckpoint"))
-                        db.setPragma("wal_autocheckpoint", xml.attributes().value("wal_autocheckpoint").toString());
+                        transaction.setPragma("wal_autocheckpoint", xml.attributes().value("wal_autocheckpoint").toString());
                     if(xml.attributes().hasAttribute("synchronous"))
-                        db.setPragma("synchronous", xml.attributes().value("synchronous").toString());
+                        transaction.setPragma("synchronous", xml.attributes().value("synchronous").toString());
                     loadPragmas();
                 } else if(xml.name() == "attached") {
                     while(xml.readNext() != QXmlStreamReader::EndElement && xml.name() != "attached")
@@ -3083,17 +3094,18 @@ void MainWindow::saveProject(const QString& currentFilename)
         else
             xml.writeAttribute("path", db.currentFile());
 
+        auto transaction = db.get("app");
         xml.writeAttribute("readonly", QString::number(db.readOnly()));
-        xml.writeAttribute("foreign_keys", db.getPragma("foreign_keys"));
-        xml.writeAttribute("case_sensitive_like", db.getPragma("case_sensitive_like"));
-        xml.writeAttribute("temp_store", db.getPragma("temp_store"));
-        xml.writeAttribute("wal_autocheckpoint", db.getPragma("wal_autocheckpoint"));
-        xml.writeAttribute("synchronous", db.getPragma("synchronous"));
+        xml.writeAttribute("foreign_keys", transaction.getPragma("foreign_keys"));
+        xml.writeAttribute("case_sensitive_like", transaction.getPragma("case_sensitive_like"));
+        xml.writeAttribute("temp_store", transaction.getPragma("temp_store"));
+        xml.writeAttribute("wal_autocheckpoint", transaction.getPragma("wal_autocheckpoint"));
+        xml.writeAttribute("synchronous", transaction.getPragma("synchronous"));
         xml.writeEndElement();
 
         // Attached databases
         xml.writeStartElement("attached");
-        db.executeSQL("PRAGMA database_list;", false, true, [&xml](int, std::vector<QByteArray> values, std::vector<QByteArray>) -> bool {
+        transaction.executeSQL("PRAGMA database_list;", false, true, [&xml](int, std::vector<QByteArray> values, std::vector<QByteArray>) -> bool {
             auto schema = values.at(1);
             if(schema != "main" && schema != "temp")
             {
@@ -3484,7 +3496,8 @@ void MainWindow::saveAsView(const std::string& query)
     }
 
     // Create the view
-    if(db.executeSQL("CREATE VIEW " + sqlb::escapeIdentifier(name.toStdString()) + " AS " + query + ";"))
+    auto transaction = db.get("app");
+    if(transaction.executeSQL("CREATE VIEW " + sqlb::escapeIdentifier(name.toStdString()) + " AS " + query + ";"))
         QMessageBox::information(this, qApp->applicationName(), tr("View successfully created."));
     else
         QMessageBox::warning(this, qApp->applicationName(), tr("Error creating view: %1").arg(db.lastError()));

@@ -276,7 +276,7 @@ void AddRecordDialog::populateFields()
 
 void AddRecordDialog::accept()
 {
-    if(!pdb.executeSQL(ui->sqlTextEdit->text().toStdString()))
+    if(!pdb.get("dialog").executeSQL(ui->sqlTextEdit->text().toStdString()))
     {
         QMessageBox::warning(
             this,

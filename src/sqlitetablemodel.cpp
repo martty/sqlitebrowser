@@ -30,7 +30,7 @@ SqliteTableModel::SqliteTableModel(DBBrowserDB& db, QObject* parent, const QStri
     reloadSettings();
 
     worker = new RowLoader(
-        [this, force_wait](){ return m_db.get(tr("reading rows"), force_wait); },
+        [this, force_wait](){ return m_db.get(tr("reading rows"), force_wait ? ChoiceOnUse::Wait : ChoiceOnUse::Ask); },
         [this](QString stmt){ return m_db.logSQL(stmt, kLogMsg_App); },
         m_headers, m_mutexDataCache, m_cache
         );
@@ -268,6 +268,8 @@ QVariant SqliteTableModel::getMatchingCondFormat(const std::map<size_t, std::vec
     value.toDouble(&isNumber);
     std::string sql;
 
+    auto transaction = m_db.get("table model");
+
     // For each conditional format for this column,
     // if the condition matches the current data, return the associated format.
     for (const CondFormat& eachCondFormat : mCondFormats.at(column)) {
@@ -278,7 +280,7 @@ QVariant SqliteTableModel::getMatchingCondFormat(const std::map<size_t, std::vec
 
         // Empty filter means: apply format to any row.
         // Query the DB for the condition, waiting in case there is a loading in progress.
-        if (eachCondFormat.filter().isEmpty() || m_db.querySingleValueFromDb(sql, false, DBBrowserDB::Wait) == "1")
+        if (eachCondFormat.filter().isEmpty() || transaction.querySingleValueFromDb(sql, false, ChoiceOnUse::Wait) == "1")
             switch (role) {
               case Qt::ForegroundRole:
                 return eachCondFormat.foregroundColor();
@@ -469,8 +471,10 @@ bool SqliteTableModel::setTypedData(const QModelIndex& index, bool isBlob, const
         return false;
     }
 
-    if(index.isValid() && role == Qt::EditRole)
-    {
+    if (!(index.isValid() && role == Qt::EditRole))
+        return false;
+
+    
         std::unique_lock<std::mutex> lock(m_mutexDataCache);
 
         auto & cached_row = m_cache.at(static_cast<size_t>(index.row()));
@@ -516,7 +520,9 @@ bool SqliteTableModel::setTypedData(const QModelIndex& index, bool isBlob, const
                 type = SQLITE_FLOAT;
         }
 
-        if(m_db.updateRecord(m_query.table(), m_headers.at(column), cached_row.at(0), newValue, type, m_query.rowIdColumns()))
+    auto transaction = m_db.get("table model");
+
+    if(transaction.updateRecord(m_query.table(), m_headers.at(column), cached_row.at(0), newValue, type, m_query.rowIdColumns()))
         {
             cached_row[column] = newValue;
 
@@ -550,13 +556,10 @@ bool SqliteTableModel::setTypedData(const QModelIndex& index, bool isBlob, const
             return true;
         } else {
             lock.unlock();
-            QMessageBox::warning(nullptr, qApp->applicationName(), tr("Error changing data:\n%1").arg(m_db.lastError()));
+        QMessageBox::warning(nullptr, qApp->applicationName(), tr("Error changing data:\n%1").arg(transaction.lastError()));
             return false;
         }
     }
-
-    return false;
-}
 
 Qt::ItemFlags SqliteTableModel::flags(const QModelIndex& index) const
 {
@@ -627,10 +630,12 @@ bool SqliteTableModel::insertRows(int row, int count, const QModelIndex& parent)
 
     const auto blank_data = makeDefaultCacheEntry();
 
+    auto transaction = m_db.get("table model");
+
     std::vector<Row> tempList;
     for(int i=row; i < row + count; ++i)
     {
-        QString rowid = m_db.addRecord(m_query.table());
+        QString rowid = transaction.addRecord(m_query.table());
         if(rowid.isNull())
         {
             return false;
@@ -640,7 +645,7 @@ bool SqliteTableModel::insertRows(int row, int count, const QModelIndex& parent)
 
         // update column with default values
         Row rowdata;
-        if(m_db.getRow(m_query.table(), rowid, rowdata))
+        if(transaction.getRow(m_query.table(), rowid, rowdata))
         {
             for(size_t j=1; j < m_headers.size(); ++j)
             {
@@ -677,8 +682,9 @@ bool SqliteTableModel::removeRows(int row, int count, const QModelIndex& parent)
             rowids.push_back(m_cache.at(static_cast<size_t>(row + i)).at(0));
         }
     }
+    auto transaction = m_db.get("table model");
 
-    bool ok = m_db.deleteRecords(m_query.table(), rowids, m_query.rowIdColumns());
+    bool ok = transaction.deleteRecords(m_query.table(), rowids, m_query.rowIdColumns());
 
     if (ok) {
         beginRemoveRows(parent, row, row + count - 1);
