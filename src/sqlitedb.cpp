@@ -1275,6 +1275,8 @@ bool DBTransaction::executeMultiSQL(QByteArray query, bool dirty, bool log)
 
 QByteArray DBTransaction::querySingleValueFromDb(const std::string& sql, bool log, ChoiceOnUse choice) const
 {
+    if (!pParent)
+        return QByteArray();
     if(log)
         pParent->logSQL(QString::fromStdString(sql), kLogMsg_App);
 
@@ -1314,7 +1316,8 @@ QByteArray DBTransaction::querySingleValueFromDb(const std::string& sql, bool lo
 
 bool DBTransaction::getRow(const sqlb::ObjectIdentifier& table, const QString& rowid, std::vector<QByteArray>& rowdata) const
 {
-
+    if (!pParent)
+        return false;
     std::string query = "SELECT * FROM " + table.toString() + " WHERE ";
 
     // For a single rowid column we can use a simple WHERE condition, for multiple rowid columns we have to use sqlb_make_single_value to decode the composed rowid values.
@@ -1438,6 +1441,8 @@ std::string DBTransaction::emptyInsertStmt(const std::string& schemaName, const 
 
 QString DBTransaction::addRecord(const sqlb::ObjectIdentifier& tablename)
 {
+    if (!pParent)
+        return QString();
     sqlb::TablePtr table = pParent->getTableByName(tablename);
     if(!table)
         return QString();
@@ -1470,6 +1475,8 @@ QString DBTransaction::addRecord(const sqlb::ObjectIdentifier& tablename)
 
 bool DBTransaction::deleteRecords(const sqlb::ObjectIdentifier& table, const std::vector<QByteArray>& rowids, const sqlb::StringVector& pseudo_pk)
 {
+    if (!pParent)
+        return false;
     // Get primary key of the object to edit.
     sqlb::StringVector pks = pParent->primaryKeyForEditing(table, pseudo_pk);
     if(pks.empty())
@@ -1510,6 +1517,8 @@ bool DBTransaction::deleteRecords(const sqlb::ObjectIdentifier& table, const std
 bool DBTransaction::updateRecord(const sqlb::ObjectIdentifier& table, const std::string& column,
                                const QByteArray& rowid, const QByteArray& value, int force_type, const sqlb::StringVector& pseudo_pk)
 {
+    if (!pParent)
+        return false;
     // Get primary key of the object to edit.
     sqlb::StringVector pks = pParent->primaryKeyForEditing(table, pseudo_pk);
     if(pks.empty())
@@ -1604,6 +1613,8 @@ bool DBTransaction::addColumn(const sqlb::ObjectIdentifier& tablename, const sql
 
 bool DBTransaction::alterTable(const sqlb::ObjectIdentifier& tablename, const sqlb::Table& new_table, AlterTableTrackColumns track_columns, std::string newSchemaName)
 {
+    if (!pParent)
+        return false;
     // This function is split into three different parts:
     // Part 1 checks the arguments and prepares them for processing. It also prepares the transaction etc.
     // Part 2 uses the built-in abilities of SQLite to change as much of the table schema as possible.
@@ -1984,13 +1995,13 @@ void DBBrowserDB::logSQL(const QString& statement, LogMessageType msgtype) const
 void DBBrowserDB::updateSchema()
 {
     auto transaction = get("internal");
-
+    
     schemata.clear();
 
     // Exit here is no DB is opened
-    if(!isOpen())
+    if (!transaction)
         return;
-
+    
     // Get a list of all databases. This list always includes the main and the temp database but can include more items if there are attached databases
     if (!transaction.executeSQL("PRAGMA database_list;", false, true, [this, &transaction](int, std::vector<QByteArray> db_values, std::vector<QByteArray>) -> bool {
         // Get the schema name which is in column 1 (counting starts with 0). 0 contains an ID and 2 the file path.
@@ -2083,6 +2094,8 @@ QString DBTransaction::getPragma(const std::string& pragma) const
 
 bool DBTransaction::setPragma(const std::string& pragma, const QString& value)
 {
+    if (!pParent)
+        return false;
     // Set the pragma value
     std::string sql = "PRAGMA " + pragma + " = '" + value.toStdString() + "';";
 
